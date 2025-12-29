@@ -1,0 +1,286 @@
+generator client {
+  provider = "prisma-client"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ENUMS (For Data Integrity)
+
+enum RoleType {
+  ADMIN
+  STAFF
+  GUEST
+}
+
+enum BookingStatus {
+  PENDING
+  CONFIRMED
+  CANCELLED
+  CHECKED_IN
+  CHECKED_OUT
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  REFUNDED
+}
+
+enum RoomStatus {
+  AVAILABLE
+  DIRTY
+  MAINTENANCE
+  OCCUPIED
+}
+
+// IDENTITY & ACCESS MANAGEMENT
+
+model User {
+  id              String    @id @default(uuid())
+  email           String    @unique
+  passwordHash    String
+  isEmailVerified Boolean   @default(false)
+  
+  // Relations
+  roleId          String
+  role            Role      @relation(fields: [roleId], references: [id])
+  
+  guestProfile    GuestProfile?
+  staffProfile    StaffProfile?
+
+  // Audit
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  deletedAt       DateTime? // Soft delete
+
+  @@index([email])
+  @@map("users")
+}
+
+model Role {
+  id    String   @id @default(uuid())
+  name  RoleType @unique
+  users User[]
+
+  @@map("roles")
+}
+
+model GuestProfile {
+  id            String   @id @default(uuid())
+  userId        String   @unique
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  firstName     String
+  lastName      String
+  phone         String?
+  loyaltyPoints Int      @default(0)
+  
+  // Relations
+  bookings      Booking[]
+  reviews       Review[]
+
+  updatedAt     DateTime @updatedAt
+
+  @@map("guest_profiles")
+}
+
+model StaffProfile {
+  id          String   @id @default(uuid())
+  userId      String   @unique
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  department  String
+  employeeId  String   @unique
+  shiftStatus String?  
+
+  updatedAt   DateTime @updatedAt
+
+  @@map("staff_profiles")
+}
+
+// ROOM STRUCTURE & DEFINITION
+
+model RoomType {
+  id          String   @id @default(uuid())
+  name        String
+  slug        String   @unique 
+  description String   @db.Text
+  basePrice   Decimal  @db.Decimal(10, 2) 
+  capacity    Int
+  size        String?
+  view        String?
+
+  // Relations
+  units             RoomUnit[]
+  images            RoomImage[]
+  amenityCategories AmenityCategory[]
+  inventory         RoomInventory[]
+  dailyRates        DailyRate[]
+  bookings          Booking[]
+  reviews           Review[]
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("room_types")
+}
+
+model RoomUnit {
+  id          String     @id @default(uuid())
+  roomTypeId  String
+  roomType    RoomType   @relation(fields: [roomTypeId], references: [id])
+  
+  roomNumber  String     @unique
+  floor       Int?
+  status      RoomStatus @default(AVAILABLE)
+
+  bookings    Booking[]
+
+  @@map("room_units")
+}
+
+model RoomImage {
+  id         String   @id @default(uuid())
+  roomTypeId String
+  roomType   RoomType @relation(fields: [roomTypeId], references: [id], onDelete: Cascade)
+  
+  url        String
+  order      Int      @default(0)
+
+  @@map("room_images")
+}
+
+model AmenityCategory {
+  id           String        @id @default(uuid())
+  roomTypeId   String
+  roomType     RoomType      @relation(fields: [roomTypeId], references: [id])
+  categoryName String
+  
+  items        AmenityItem[]
+
+  @@map("amenity_categories")
+}
+
+model AmenityItem {
+  id           String          @id @default(uuid())
+  categoryId   String
+  category     AmenityCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  
+  itemName     String
+  icon         String?
+
+  @@map("amenity_items")
+}
+
+// INVENTORY & PRICING
+
+model RoomInventory {
+  id             String   @id @default(uuid())
+  roomTypeId     String
+  roomType       RoomType @relation(fields: [roomTypeId], references: [id])
+  
+  date           DateTime @db.Date 
+  availableCount Int
+  totalStock     Int
+  
+  // CRITICAL: Optimistic Concurrency Control
+  version        Int      @default(0)
+
+  updatedAt      DateTime @updatedAt
+
+  @@unique([roomTypeId, date])
+  @@index([roomTypeId, date])
+  @@map("room_inventory")
+}
+
+model DailyRate {
+  id         String   @id @default(uuid())
+  roomTypeId String
+  roomType   RoomType @relation(fields: [roomTypeId], references: [id])
+  
+  date       DateTime @db.Date
+  price      Decimal  @db.Decimal(10, 2)
+  currency   String   @default("USD")
+
+  @@unique([roomTypeId, date]) // Ensure only one price per type per day
+  @@map("daily_rates")
+}
+
+// BOOKING FLOW
+
+model Booking {
+  id               String        @id @default(uuid())
+  bookingReference String        @unique 
+  
+  guestId          String
+  guest            GuestProfile  @relation(fields: [guestId], references: [id])
+  
+  roomTypeId       String
+  roomType         RoomType      @relation(fields: [roomTypeId], references: [id])
+  
+  // NULLABLE: Unit is assigned closer to check-in, not at creation
+  roomUnitId       String?
+  roomUnit         RoomUnit?     @relation(fields: [roomUnitId], references: [id])
+  
+  checkIn          DateTime      @db.Date
+  checkOut         DateTime      @db.Date
+  totalPrice       Decimal       @db.Decimal(10, 2)
+  currency         String        @default("USD")
+  
+  status           BookingStatus @default(PENDING)
+  specialRequests  String?       @db.Text
+  
+  // Relations
+  payment          Payment?
+  review           Review?
+
+  // Audit
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+  deletedAt        DateTime?     
+
+  @@index([checkIn, checkOut])
+  @@index([status])
+  @@map("bookings")
+}
+
+model Payment {
+  id                    String        @id @default(uuid())
+  bookingId             String        @unique 
+  booking               Booking       @relation(fields: [bookingId], references: [id])
+  
+  amount                Decimal       @db.Decimal(10, 2)
+  method                String        
+  providerTransactionId String        @unique
+  status                PaymentStatus @default(PENDING)
+  
+  createdAt             DateTime      @default(now())
+
+  @@map("payments")
+}
+
+// SOCIAL
+
+model Review {
+  id         String       @id @default(uuid())
+  
+  roomTypeId String
+  roomType   RoomType     @relation(fields: [roomTypeId], references: [id])
+  
+  guestId    String
+  guest      GuestProfile @relation(fields: [guestId], references: [id])
+  
+  bookingId  String       @unique 
+  booking    Booking      @relation(fields: [bookingId], references: [id])
+  
+  rating     Int          
+  comment    String?      @db.Text
+  isApproved Boolean      @default(false)
+  
+  createdAt  DateTime     @default(now())
+
+  @@map("reviews")
+}
