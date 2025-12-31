@@ -17,14 +17,14 @@ const ensurePasswordPolicy = (password) => {
 const hashPassword = (password) => bcrypt.hash(password, BCRYPT_SALT_ROUNDS);
 
 const setAuthCookies = (res, accessToken, refreshToken) => {
-    const common = {
+    const options = {
         httpOnly: true,
         secure: isProd, 
         sameSite: "strict",
         path: "/",
     };
-    res.cookie("accessToken", accessToken, { ...common, maxAge: 15 * 60 * 1000 }); // 15m
-    res.cookie("refreshToken", refreshToken, { ...common, maxAge: 7 * 24 * 60 * 60 * 1000 }); // 7d
+    res.cookie("accessToken", accessToken, { ...options, maxAge: 15 * 60 * 1000 }); // 15m
+    res.cookie("refreshToken", refreshToken, { ...options, maxAge: 7 * 24 * 60 * 60 * 1000 }); // 7d
 };
 
 const clearAuthCookies = (res) => {
