@@ -96,6 +96,7 @@ model StaffProfile {
   department  String
   employeeId  String   @unique
   shiftStatus String?  
+  phone       String?
 
   updatedAt   DateTime @updatedAt
 

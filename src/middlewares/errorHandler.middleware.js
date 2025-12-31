@@ -1,16 +1,8 @@
-import { Request, Response, NextFunction } from "express";
-
-const errorHandler = (err: any, req: Request, res: Response, next: NextFunction): void => {
+const errorHandler = (err, req, res, next) => {
     const statusCode = err.statusCode || 500;
     
     // Standard error response structure
-    const errorResponse: {
-        success: boolean;
-        statusCode: number;
-        message: string;
-        stack?: string;
-        errors?: any[];
-    } = {
+    const errorResponse = {
         success: false,
         statusCode: statusCode,
         message: err.message || 'Internal Server Error',
@@ -26,7 +18,7 @@ const errorHandler = (err: any, req: Request, res: Response, next: NextFunction)
         errorResponse.statusCode = 400;
         errorResponse.message = 'Validation Error';
         // Extract specific validation messages if available
-        errorResponse.errors = Object.values(err.errors).map((val: any) => val.message);
+        errorResponse.errors = Object.values(err.errors).map((val) => val.message);
     }
 
     if (err.name === 'CastError') {
@@ -49,8 +41,7 @@ const errorHandler = (err: any, req: Request, res: Response, next: NextFunction)
         errorResponse.message = 'Your token has expired. Please log in again.';
     }
 
-    // Send the response
-    res.status(errorResponse.statusCode).json(errorResponse);
+    res.status(statusCode).json(errorResponse);
 };
 
-export default errorHandler;
+export { errorHandler };
