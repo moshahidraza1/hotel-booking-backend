@@ -33,7 +33,7 @@ const createRoomType = asyncHandler(async(req, res) => {
     }
 
     // Check if a room type with this name already exists
-    const existingRoomType = await prisma.roomType.findUnique({
+    const existingRoomType = await prisma.roomType.findFirst({
         where: {
             name: name,
             deletedAt: null  
@@ -78,7 +78,7 @@ const getRoomType = asyncHandler(async(req, res) => {
     const {roomId} = req.params;
 
     // check if room Type exists
-    const roomType = await prisma.roomType.findUnique({
+    const roomType = await prisma.roomType.findFirst({
         where:{id: roomId, deletedAt:null},
         include: {
             images:{
