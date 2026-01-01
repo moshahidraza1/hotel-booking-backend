@@ -32,6 +32,18 @@ const createRoomType = asyncHandler(async(req, res) => {
         throw new ApiError(400, "Room type name is required");
     }
 
+    // Check if a room type with this name already exists
+    const existingRoomType = await prisma.roomType.findUnique({
+        where: {
+            name: name,
+            deletedAt: null  
+        }
+    });
+
+    if (existingRoomType) {
+        throw new ApiError(409, "A room type with this name already exists");
+    }
+
     if(!description){
         throw new ApiError(400, "Description is required");
     }
