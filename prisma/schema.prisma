@@ -51,6 +51,7 @@ model User {
   
   guestProfile    GuestProfile?
   staffProfile    StaffProfile?
+  roomUnitHistory RoomUnitHistory[]
 
   // Audit
   createdAt       DateTime  @default(now())
@@ -107,7 +108,7 @@ model StaffProfile {
 
 model RoomType {
   id          String   @id @default(uuid())
-  name        String
+  name        String   @unique
   slug        String   @unique 
   description String   @db.Text
   basePrice   Decimal  @db.Decimal(10, 2) 
@@ -141,8 +142,26 @@ model RoomUnit {
   status      RoomStatus @default(AVAILABLE)
 
   bookings    Booking[]
+  history     RoomUnitHistory[]
 
   @@map("room_units")
+}
+
+model RoomUnitHistory {
+  id          String   @id @default(uuid())
+  roomUnitId  String
+  roomUnit    RoomUnit @relation(fields: [roomUnitId], references: [id], onDelete: Cascade)
+  
+  oldStatus   RoomStatus
+  newStatus   RoomStatus
+  changedBy   String  
+  changedByUser User @relation(fields: [changedBy], references: [id], onDelete: Cascade)
+  reason      String?
+  
+  createdAt   DateTime @default(now())
+
+  @@index([roomUnitId, createdAt])
+  @@map("room_unit_history")
 }
 
 model RoomImage {
