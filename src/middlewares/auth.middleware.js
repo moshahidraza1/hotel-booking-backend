@@ -2,6 +2,7 @@ import { asyncHandler } from "../utils/asyncHandler.js";
 import { ApiError } from "../utils/ApiError.js";
 import { verifyAccessToken, parseBearer } from "../utils/tokenService.js";
 import { prisma } from "../db/db.config.js";
+import { ApiResponse } from "../utils/ApiResponse.js";
 
 const verifyJWT = asyncHandler(async (req, res, next) => {
   const token = req.cookies?.accessToken || parseBearer(req.headers.authorization);
@@ -33,4 +34,54 @@ const verifyJWT = asyncHandler(async (req, res, next) => {
   }
 });
 
-export { verifyJWT };
+const verifyAdmin = asyncHandler(async(req,res,next) => {
+
+    if(!req.user || !req.user.id){
+      throw new ApiError(401, "Authentication required");
+    }
+
+    const user = await prisma.user.findUnique({
+      where: {id: req.user.id},
+      include: {
+        role: {
+          select: {
+            name: true
+          }
+        } 
+      }
+    });
+    if(!user || user.deletedAt){
+      throw new ApiError(404, "User Not Found or deleted");
+    }
+    if(user.role.name!=="ADMIN"){
+      throw new ApiError(403, "Only Admin can access this route");
+    }
+    next();
+});
+
+const verifyAdminOrStaff = asyncHandler(async(req,res,next) => {
+  if(!req.user || !req.user.id){
+      throw new ApiError(401, "Authentication required");
+    }
+
+    const user = await prisma.user.findUnique({
+      where: {id: req.user.id},
+      include: {
+        role: { 
+          select: {
+            name: true
+          }
+        } 
+      }
+    });
+    if(!user || user.deletedAt){
+      throw new ApiError(404, "User Not Found or deleted");
+    }
+    if(user.role.name!=="ADMIN" && user.role.name!=="STAFF"){
+      throw new ApiError(403, "Only Admin and Staff can access this route");
+    }
+    next();
+});
+
+
+export { verifyJWT, verifyAdmin, verifyAdminOrStaff };
