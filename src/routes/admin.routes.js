@@ -14,6 +14,20 @@ import {
     getCustomerDetails,
     getDashboardStats,
 } from "../controllers/admin.controller.js";
+import {
+    updateAdminDetailsSchema,
+    changePasswordSchema,
+    addStaffSchema,
+    updateStaffDetailsSchema,
+    deactivateStaffSchema,
+    activateStaffSchema,
+    deactivateCustomerSchema,
+    activateCustomerSchema,
+    getCustomerDetailsSchema,
+    paginationSchema,
+} from "../validators/admin.validator.js";
+import { validate } from "../middlewares/validator.middleware.js";
+
 
 const router = Router();
 router.use(verifyJWT);
@@ -21,28 +35,24 @@ router.use(verifyAdmin);
 
 router.get('/', getAdminProfile);
 
-router.patch('/update', updateAdminDetails);
+router.patch('/update', validate(updateAdminDetailsSchema), updateAdminDetails);
 
-router.post('/staff', addStaff);
-
-router.get('/staff', getAllStaff);
-
+// Staff Management Routes
+router.post('/staff', validate(addStaffSchema) , addStaff);
+router.get('/staff', validate(paginationSchema), getAllStaff);
 //TODO: Add get Staff Details route
-router.patch('/staff/:staffId', updateStaffDetails);
+router.patch('/staff/:staffId', validate(updateStaffDetailsSchema),  updateStaffDetails);
+router.post('/staff/deactivate', validate(deactivateStaffSchema),  disableStaffAccount);
+router.post('/staff/activate', validate(activateStaffSchema), enableStaffAccount);
 
-router.post('/staff/deactivate', disableStaffAccount);
+// Customer Management Routes
+router.get('/customer', validate(paginationSchema), getAllCustomers);
+router.post('/customer/deactivate', validate(deactivateCustomerSchema), disableCustomerAccount);
+router.post('/customer/activate', validate(activateCustomerSchema),  enableCustomerAccount);
+router.get('/customer/:customerId', validate(getCustomerDetailsSchema), getCustomerDetails);
 
-router.post('/staff/activate', enableStaffAccount);
-
-router.get('/customer', getAllCustomers);
-
-router.post('/customer/deactivate', disableCustomerAccount);
-
-router.post('/customer/activate', enableCustomerAccount);
-
-router.get('/customer/:customerId', getCustomerDetails);
-
-router.get('/dashboard', getDashboardStats);
+//Dashboard Route
+router.get('/dashboard',  getDashboardStats);
 
 export default router;
 

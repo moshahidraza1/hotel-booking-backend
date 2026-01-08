@@ -1,7 +1,7 @@
-import { ApiError } from "../utils/ApiError";
-import { ApiResponse } from "../utils/ApiResponse";
-import { asyncHandler } from "../utils/asyncHandler";
-import { prisma } from "../db/db.config";
+import { ApiError } from "../utils/ApiError.js";
+import { ApiResponse } from "../utils/ApiResponse.js";
+import { asyncHandler } from "../utils/asyncHandler.js";
+import { prisma } from "../db/db.config.js";
 
 // Get admin profile
 const getAdminProfile = asyncHandler(async (req, res) => {
