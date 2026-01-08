@@ -158,10 +158,13 @@ const getAllStaff = asyncHandler(async (req, res) => {
     );
 });
 
+//TODO: Add get a Staff Details function
+
 // Update staff details (admin only)
 const updateStaffDetails = asyncHandler(async (req, res) => {
     const adminId = req.user.id;
-    const { staffId, firstName, lastName, phone, department, employeeId, shiftStatus } = req.body;
+    const {staffId} = req.params;
+    const { firstName, lastName, phone, department, employeeId, shiftStatus } = req.body;
 
     const admin = await prisma.user.findUnique({
         where: { id: adminId },
