@@ -16,7 +16,6 @@ import {
 } from "../controllers/admin.controller.js";
 import {
     updateAdminDetailsSchema,
-    changePasswordSchema,
     addStaffSchema,
     updateStaffDetailsSchema,
     deactivateStaffSchema,
