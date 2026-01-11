@@ -36,7 +36,7 @@ const router = Router();
 
 router.post('/login', validate(managementLoginSchema), loginManagementUser);
 router.post('/refresh-token', refreshTokens);
-app.use(verifyAdminOrStaff);
+router.use(verifyAdminOrStaff);
 router.post("/logout", verifyJWT, logoutUser);
 
 router.use(verifyJWT);
