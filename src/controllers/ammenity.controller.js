@@ -140,11 +140,16 @@ const updateCategory = asyncHandler(async(req, res) => {
 
     // Verify category exists
     const category = await prisma.amenityCategory.findUnique({
-        where: {id: categoryId}
+        where: {id: categoryId},
+        include: {roomType: {select: {deletedAt: true}}}
     });
 
     if(!category){
         throw new ApiError(404, "Amenity category not found");
+    }
+
+    if (category.roomType?.deletedAt) {
+        throw new ApiError(400, "Cannot modify amenities for a deleted room type");
     }
 
     // Check for duplicate name in same room type
@@ -195,13 +200,16 @@ const deleteCategory = asyncHandler(async(req, res) => {
         include: {
             items: true,
             roomType: {
-                select: {id: true, name: true}
+                select: {id: true, name: true, deletedAt: true}
             }
         }
     });
 
     if(!category){
         throw new ApiError(404, "Amenity category not found");
+    }
+    if (category.roomType?.deletedAt) {
+        throw new ApiError(400, "Cannot delete amenities for a deleted room type");
     }
 
     // Delete category and cascade delete items
@@ -241,11 +249,14 @@ const createAmenityItem = asyncHandler(async(req, res) => {
 
     // Verify category exists
     const category = await prisma.amenityCategory.findUnique({
-        where: {id: categoryId}
+        where: { id: categoryId },
+        include: { roomType: { select: { deletedAt: true } } },
     });
 
-    if(!category){
-        throw new ApiError(404, "Amenity category not found");
+    if (!category) throw new ApiError(404, "Amenity     category not found");
+
+    if (category.roomType?.deletedAt) {
+        throw new ApiError(400, "Cannot add amenities to a deleted room type");
     }
 
     // Check for duplicate item name within this category
@@ -309,12 +320,20 @@ const updateAmenityItem = asyncHandler(async(req, res) => {
 
     // Verify item exists
     const existingItem = await prisma.amenityItem.findUnique({
-        where: {id: itemId},
-        include: {category: true}
+        where: { id: itemId },
+        include: {
+            category: {
+                include: { roomType: { select: { deletedAt: true } } },
+            },
+        },
     });
 
     if(!existingItem){
         throw new ApiError(404, "Amenity item not found");
+    }
+
+    if (existingItem.category?.roomType?.deletedAt) {
+        throw new ApiError(400, "Cannot modify amenities for a deleted room type");
     }
 
     // Check for duplicate name if updating name
@@ -375,13 +394,16 @@ const deleteAmenityItem = asyncHandler(async(req, res) => {
         where: {id: itemId},
         include: {
             category: {
-                select: {id: true, categoryName: true}
+            select: { id: true, categoryName: true, roomType: { select: { deletedAt: true } } }
             }
         }
     });
 
     if(!item){
         throw new ApiError(404, "Amenity item not found");
+    }
+    if (item.category.roomType?.deletedAt) {
+        throw new ApiError(400, "Cannot delete amenities for a deleted room type");
     }
 
     // Delete item
