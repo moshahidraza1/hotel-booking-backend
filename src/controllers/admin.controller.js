@@ -2,6 +2,25 @@ import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { prisma } from "../db/db.config.js";
+import bcrypt from "bcrypt";
+
+const BCRYPT_SALT_ROUNDS = Number(process.env.BCRYPT_SALT_ROUNDS || 12);
+
+const ensurePasswordPolicy = (password) => {
+  if (!password || password.length < 8) {
+    throw new ApiError(400, "Password must be at least 8 characters long");
+  }
+  const hasUpperCase = /[A-Z]/.test(password);
+  const hasLowerCase = /[a-z]/.test(password);
+  const hasNumber = /\d/.test(password);
+  const hasSpecial = /[!@#$%^&*(),.?":{}|<>]/.test(password);
+  if (!hasUpperCase || !hasLowerCase || !hasNumber || !hasSpecial) {
+    throw new ApiError(400, "Password must contain uppercase, lowercase, number, and special character");
+  }
+};
+
+const hashPassword = (password) => bcrypt.hash(password, BCRYPT_SALT_ROUNDS);
+
 
 // Get admin profile
 const getAdminProfile = asyncHandler(async (req, res) => {
@@ -34,10 +53,6 @@ const updateAdminDetails = asyncHandler(async (req, res) => {
         throw new ApiError(404, "User not found");
     }
 
-    if (user.role.name !== "ADMIN") {
-        throw new ApiError(403, "Only admins can update their profile");
-    }
-
     if (user.staffProfile) {
         await prisma.staffProfile.update({
             where: { id: user.staffProfile.id },
@@ -62,15 +77,6 @@ const addStaff = asyncHandler(async (req, res) => {
 
     if (!email || !password || !firstName || !lastName || !department || !employeeId) {
         throw new ApiError(400, "Email, password, firstName, lastName, department, and employeeId are required");
-    }
-
-    const admin = await prisma.user.findUnique({
-        where: { id: adminId },
-        include: { role: true },
-    });
-
-    if (!admin || admin.role.name !== "ADMIN") {
-        throw new ApiError(403, "Only admins can add staff");
     }
 
     ensurePasswordPolicy(password);
@@ -166,15 +172,6 @@ const updateStaffDetails = asyncHandler(async (req, res) => {
     const {staffId} = req.params;
     const { firstName, lastName, phone, department, employeeId, shiftStatus } = req.body;
 
-    const admin = await prisma.user.findUnique({
-        where: { id: adminId },
-        include: { role: true },
-    });
-
-    if (!admin || admin.role.name !== "ADMIN") {
-        throw new ApiError(403, "Only admins can update staff details");
-    }
-
     const staffUser = await prisma.user.findUnique({
         where: { id: staffId },
         include: { staffProfile: true, role: true },
@@ -208,15 +205,6 @@ const disableStaffAccount = asyncHandler(async (req, res) => {
     const adminId = req.user.id;
     const { staffId, reason } = req.body;
 
-    const admin = await prisma.user.findUnique({
-        where: { id: adminId },
-        include: { role: true },
-    });
-
-    if (!admin || admin.role.name !== "ADMIN") {
-        throw new ApiError(403, "Only admins can disable staff accounts");
-    }
-
     if (adminId === staffId) {
         throw new ApiError(400, "You cannot disable your own account");
     }
@@ -246,15 +234,6 @@ const disableStaffAccount = asyncHandler(async (req, res) => {
 const enableStaffAccount = asyncHandler(async (req, res) => {
     const adminId = req.user.id;
     const { staffId } = req.body;
-
-    const admin = await prisma.user.findUnique({
-        where: { id: adminId },
-        include: { role: true },
-    });
-
-    if (!admin || admin.role.name !== "ADMIN") {
-        throw new ApiError(403, "Only admins can enable staff accounts");
-    }
 
     const staffUser = await prisma.user.findUnique({
         where: { id: staffId },
@@ -326,15 +305,6 @@ const disableCustomerAccount = asyncHandler(async (req, res) => {
     const adminId = req.user.id;
     const { customerId, reason } = req.body;
 
-    const admin = await prisma.user.findUnique({
-        where: { id: adminId },
-        include: { role: true },
-    });
-
-    if (!admin || admin.role.name !== "ADMIN") {
-        throw new ApiError(403, "Only admins can disable customer accounts");
-    }
-
     const customerUser = await prisma.user.findUnique({
         where: { id: customerId },
         include: { role: true },
@@ -372,15 +342,6 @@ const disableCustomerAccount = asyncHandler(async (req, res) => {
 const enableCustomerAccount = asyncHandler(async (req, res) => {
     const adminId = req.user.id;
     const { customerId } = req.body;
-
-    const admin = await prisma.user.findUnique({
-        where: { id: adminId },
-        include: { role: true },
-    });
-
-    if (!admin || admin.role.name !== "ADMIN") {
-        throw new ApiError(403, "Only admins can enable customer accounts");
-    }
 
     const customerUser = await prisma.user.findUnique({
         where: { id: customerId },
@@ -429,15 +390,6 @@ const getCustomerDetails = asyncHandler(async (req, res) => {
 
 const getDashboardStats = asyncHandler(async (req, res) => {
     const adminId = req.user.id;
-
-    const admin = await prisma.user.findUnique({
-        where: { id: adminId },
-        include: { role: true },
-    });
-
-    if (!admin || (admin.role.name !== "ADMIN" && admin.role.name !== "STAFF")) {
-        throw new ApiError(403, "Access denied");
-    }
 
     const [totalUsers, totalBookings, totalRevenue, recentBookings] = await prisma.$transaction([
         prisma.user.count({ where: { role: { name: "GUEST" }, deletedAt: null } }),

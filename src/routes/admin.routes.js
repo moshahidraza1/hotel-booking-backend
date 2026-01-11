@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { verifyJWT, verifyAdmin } from "../middlewares/auth.middleware.js";
+import { verifyJWT, verifyAdmin, verifyAdminOrStaff } from "../middlewares/auth.middleware.js";
 import {
     getAdminProfile,
     updateAdminDetails,
@@ -14,6 +14,10 @@ import {
     getCustomerDetails,
     getDashboardStats,
 } from "../controllers/admin.controller.js";
+
+import { loginManagementUser, refreshTokens, logoutUser } from "../controllers/user.controller.js";
+
+import { managementLoginSchema } from "../validators/user.validator.js";
 import {
     updateAdminDetailsSchema,
     addStaffSchema,
@@ -25,10 +29,16 @@ import {
     getCustomerDetailsSchema,
     paginationSchema,
 } from "../validators/admin.validator.js";
+
 import { validate } from "../middlewares/validator.middleware.js";
 
-
 const router = Router();
+
+router.post('/login', validate(managementLoginSchema), loginManagementUser);
+router.post('/refresh-token', refreshTokens);
+app.use(verifyAdminOrStaff);
+router.post("/logout", verifyJWT, logoutUser);
+
 router.use(verifyJWT);
 router.use(verifyAdmin);
 
