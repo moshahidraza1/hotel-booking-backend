@@ -138,7 +138,8 @@ const getAllRoomType = asyncHandler(async(req, res)=>{
 });
 // update room type
 const updateRoomType = asyncHandler(async(req,res) => {
-    const {roomId, name, description, basePrice, capacity, size, view} = req.body;
+    const {roomId} = req.params;
+    const {name, description, basePrice, capacity, size, view} = req.body;
 
     if(!roomId){
         throw new ApiError(400, "Room id is required");
@@ -210,7 +211,7 @@ const softDeleteRoomType = asyncHandler(async(req, res)=> {
 
     await prisma.roomType.update({
         where: {id: roomId},
-        data: {deletedAt: new Date.now()}
+        data: {deletedAt: new Date()}
     });
 
     return res.status(200).json(
