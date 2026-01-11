@@ -64,4 +64,3 @@ router.get('/customer/:customerId', validate(getCustomerDetailsSchema), getCusto
 router.get('/dashboard',  getDashboardStats);
 
 export default router;
-
