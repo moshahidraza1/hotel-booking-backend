@@ -3,17 +3,25 @@ import { ApiResponse } from "../utils/ApiResponse.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { prisma } from "../db/db.config.js";
 
+
+const normalizeDateOnlyUTC = (dateInput) => {
+  const iso = String(dateInput).split("T")[0];
+  const [y, m, d] = iso.split("-").map(Number);
+  if (!y || !m || !d) return null;
+  return new Date(Date.UTC(y, m - 1, d));
+};
+
 // Initialize stock for date (totalStock, availableCount)
 const createInventory = asyncHandler(async(req, res) => {
     const {roomTypeId, date, availableCount, totalStock} = req.body;
     
-    if(!roomTypeId || !date || !availableCount || !totalStock){
+    if(!roomTypeId || !date || availableCount === undefined || totalStock === undefined){
         throw new ApiError(400, "RoomType Id, Date, Available Count and Total Stock are required");
     }
     
     // Validate date is a valid Date object
-    const parsedDate = new Date(date);
-    if(isNaN(parsedDate.getTime())){
+    const parsedDate = normalizeDateOnlyUTC(date);
+    if (!parsedDate) {
         throw new ApiError(400, "Invalid date format");
     }
     
@@ -65,8 +73,8 @@ const getInventory = asyncHandler(async(req, res) => {
         throw new ApiError(400, "Room Type Id and date are required");
     }
     
-    const parsedDate = new Date(date);
-    if(isNaN(parsedDate.getTime())){
+    const parsedDate = normalizeDateOnlyUTC(date);
+    if (!parsedDate) {
         throw new ApiError(400, "Invalid date format");
     }
     
@@ -125,8 +133,20 @@ const getInventoryRange = asyncHandler(async(req, res) => {
         include:{roomType:{select: {id: true, name: true}}}
     });
 
-    if(inventoryRange.length === 0){
-        throw new ApiError(404, "No inventory found for the specified date range");
+    const msPerDay = 24 * 60 * 60 * 1000;
+    const expectedDays = Math.round((endDate - startDate) / msPerDay);
+
+    if (inventoryData.length !== expectedDays) {
+    const existing = new Set(inventoryData.map((d) => d.date.toISOString().slice(0, 10)));
+    const missing = [];
+    for (let i = 0; i < expectedDays; i++) {
+        const dt = new Date(startDate.getTime() + i * msPerDay);
+        const key = dt.toISOString().slice(0, 10);
+        if (!existing.has(key)) missing.push(key);
+    }
+
+        throw new ApiError(404, `Inventory not configured for all dates in range. Missing: ${missing.join(", ")}`
+        );
     }
 
     // Find minimum available count (bottleneck)
@@ -193,8 +213,20 @@ const checkAvailability = asyncHandler(async(req, res) => {
         select: {date: true, availableCount: true}
     });
 
-    if(inventoryData.length === 0){
-        throw new ApiError(404, "No inventory data for selected dates");
+    const msPerDay = 24 * 60 * 60 * 1000;
+    const expectedDays = Math.round((endDate - startDate) / msPerDay);
+
+    if (inventoryData.length !== expectedDays) {
+    const existing = new Set(inventoryData.map((d) => d.date.toISOString().slice(0, 10)));
+    const missing = [];
+    for (let i = 0; i < expectedDays; i++) {
+        const dt = new Date(startDate.getTime() + i * msPerDay);
+        const key = dt.toISOString().slice(0, 10);
+        if (!existing.has(key)) missing.push(key);
+    }
+
+        throw new ApiError(404, `Inventory not configured for all dates in range. Missing: ${missing.join(", ")}`
+        );
     }
 
     // Check if rooms are available for entire duration
@@ -223,8 +255,8 @@ const updateInventory = asyncHandler(async(req, res) => {
         throw new ApiError(400, "RoomType Id and date are required");
     }
 
-    const parsedDate = new Date(date);
-    if(isNaN(parsedDate.getTime())){
+    const parsedDate = normalizeDateOnlyUTC(date);
+    if (!parsedDate) {
         throw new ApiError(400, "Invalid date format");
     }
 
@@ -285,15 +317,30 @@ const decrementInventory = asyncHandler(async(req, res) => {
     }
 
     const startDate = new Date(checkInDate);
+    startDate.setUTCHours(0, 0, 0, 0);
     const endDate = new Date(checkOutDate);
+    endDate.setUTCHours(0, 0, 0, 0);
     
     if(isNaN(startDate.getTime()) || isNaN(endDate.getTime())){
         throw new ApiError(400, "Invalid date format");
     }
 
+    const msPerDay = 24 * 60 * 60 * 1000;
+    const expectedDays = Math.round((endDate - startDate) / msPerDay);
+
+
     // Use transaction for atomic operation
     const result = await prisma.$transaction(async(tx) => {
         // Lock and fetch all inventory records for date range
+        await tx.$queryRaw`
+            SELECT id
+            FROM room_inventory
+            WHERE room_type_id = ${roomTypeId}
+                AND date >= ${startDate}
+                AND date < ${endDate}
+            FOR UPDATE
+        `;
+
         const inventoryRecords = await tx.roomInventory.findMany({
             where: {
                 roomTypeId,
@@ -304,15 +351,16 @@ const decrementInventory = asyncHandler(async(req, res) => {
             }
         });
 
-        if(inventoryRecords.length === 0){
-            throw new ApiError(404, "No inventory found for date range");
+        if (inventoryRecords.length !== expectedDays) {
+            throw new ApiError(404, "Inventory is not fully configured for the requested date range.");
         }
 
         // Check if all have sufficient stock
         const insufficientDates = inventoryRecords.filter(inv => inv.availableCount < quantity);
         
         if(insufficientDates.length > 0){
-            throw new ApiError(400, `Insufficient inventory on dates: ${insufficientDates.map(d => d.date).join(', ')}`);
+            const dateList = insufficientDates.map(d => d.date.toISOString().split('T')[0]).join(', ');
+            throw new ApiError(400, `Insufficient inventory on: ${dateList}`);
         }
 
         // Decrement all records
@@ -429,8 +477,8 @@ const bulkUploadInventory = asyncHandler(async(req, res) => {
             throw new ApiError(400, `Row ${index + 1}: Missing required fields (date, availableCount, totalStock)`);
         }
 
-        const parsedDate = new Date(date);
-        if(isNaN(parsedDate.getTime())){
+        const parsedDate = normalizeDateOnlyUTC(date);
+        if (!parsedDate) {
             throw new ApiError(400, `Row ${index + 1}: Invalid date format`);
         }
 

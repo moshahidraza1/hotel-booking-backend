@@ -14,6 +14,8 @@ app.get('/', (req, res) => {
   res.send('Hello World!')
 })
 
+app.use('/api/v1/user', userRouter);
+app.use('/api/v1/admin', adminRouter);
 app.use('/api/v1/room-type', roomTypeRouter);
 app.use('/api/v1/room-unit', roomUnitRouter);
 app.use('/api/v1/ammenities', ammenityRouter);
