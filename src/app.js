@@ -3,6 +3,7 @@ import roomTypeRouter from './routes/roomType.routes.js';
 import roomUnitRouter from './routes/roomUnit.routes.js';
 import ammenityRouter from './routes/ammenity.routes.js';
 import inventoryRouter from './routes/inventory.routes.js';
+import roomReportRouter from './routes/roomReport.routes.js';
 
 const app = express()
 
@@ -16,5 +17,6 @@ app.use('/api/v1/room-type', roomTypeRouter);
 app.use('/api/v1/room-unit', roomUnitRouter);
 app.use('/api/v1/ammenities', ammenityRouter);
 app.use('/api/v1/inventory', inventoryRouter);
+app.use('/api/v1/reports', roomReportRouter);
 
 export { app }

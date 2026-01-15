@@ -17,7 +17,7 @@ const validateDateRange = (startDate, endDate) => {
     }
 
     start.setHours(0, 0, 0, 0);
-    end.setHours(0, 0, 0, 0);
+    end.setHours(23, 59, 59, 999);
 
     if(start >= end){
         throw new ApiError(400, "Start date must be before end date");
@@ -34,7 +34,11 @@ const validateDateRange = (startDate, endDate) => {
 
 //Calculate occupancy rate for a date range
 const calculateOccupancyMetrics = (totalUnits, bookingDays, totalDays) => {
-    if(totalUnits === 0) return {rate: 0, percentage: "0%"};
+    if(totalUnits === 0) {
+        return {
+            rate: 0, percentage: "0.00%"
+        };
+    }
     
     const occupancyRate = (bookingDays / (totalUnits * totalDays)) * 100;
     return {
@@ -42,6 +46,34 @@ const calculateOccupancyMetrics = (totalUnits, bookingDays, totalDays) => {
         percentage: `${occupancyRate.toFixed(2)}%`
     };
 };
+
+// Calculate days between two dates
+const calculateDaysBetween = (start, end) => {
+    return Math.ceil((end - start) / (1000 * 60 * 60 * 24));
+};
+
+// Calculate overlap between two date ranges
+const calculateOverlap = (bookingStart, bookingEnd, rangeStart, rangeEnd) => {
+    const overlapStart = new Date(Math.max(bookingStart.getTime(), rangeStart.getTime()));
+    const overlapEnd = new Date(Math.min(bookingEnd.getTime(), rangeEnd.getTime()));
+    
+    if (overlapStart >= overlapEnd) return 0;
+    
+    return calculateDaysBetween(overlapStart, overlapEnd);
+};
+
+// Stats calculation function
+function calculateStats(daily, total) {
+    const occSum = daily.reduce((sum, d) => sum + d.occupancyPercentage, 0);
+    return {
+        avgOccupancyPercentage: parseFloat((occSum / daily.length).toFixed(2)),
+        minAvailableUnits: Math.min(...daily.map(d => d.availableUnits)),
+        maxAvailableUnits: Math.max(...daily.map(d => d.availableUnits)),
+        fullyBookedDays: daily.filter(d => d.availableUnits === 0).length,
+        partiallyAvailableDays: daily.filter(d => d.availableUnits > 0 && d.availableUnits < total).length,
+        completelyAvailableDays: daily.filter(d => d.availableUnits >= total).length
+    };
+}
 
 //Calculate occupancy % for date range
 const getOccupancyRate = asyncHandler(async(req, res) => {
@@ -52,15 +84,7 @@ const getOccupancyRate = asyncHandler(async(req, res) => {
     // Get all room types or specific room type
     let roomTypeFilter = {};
     if(roomTypeId){
-        const roomType = await prisma.roomType.findFirst({
-            where: {id: roomTypeId, deletedAt: null}
-        });
-
-        if(!roomType){
-            throw new ApiError(404, "Room type not found");
-        }
-
-        roomTypeFilter = {id: roomTypeId};
+        roomTypeFilter.id = roomTypeId;
     }
 
     // Fetch room types with unit counts
@@ -95,51 +119,48 @@ const getOccupancyRate = asyncHandler(async(req, res) => {
                 roomTypeId: roomType.id,
                 roomTypeName: roomType.name,
                 totalUnits: 0,
-                occupancyRate: 0,
-                occupancyPercentage: "0%",
                 bookedRoomDays: 0,
-                availableRoomDays: 0
+                availableRoomDays: 0,
+                occupancyRate: 0,
+                occupancyPercentage: "0.00%"
             };
         }
 
         // Calculate booked room-days
         let bookedRoomDays = 0;
         roomType.bookings.forEach(booking => {
-            const checkIn = new Date(booking.checkIn);
-            checkIn.setHours(0, 0, 0, 0);
-            const checkOut = new Date(booking.checkOut);
-            checkOut.setHours(0, 0, 0, 0);
-
-            // Overlap calculation
-            const overlapStart = new Date(Math.max(checkIn.getTime(), start.getTime()));
-            const overlapEnd = new Date(Math.min(checkOut.getTime(), end.getTime()));
-
-            if(overlapStart < overlapEnd){
-                const overlapDays = Math.ceil((overlapEnd - overlapStart) / (1000 * 60 * 60 * 24));
-                bookedRoomDays += overlapDays;
-            }
+            const overlapDays = calculateOverlap(
+                new Date(booking.checkIn),
+                new Date(booking.checkOut),
+                start,
+                end
+            );
+            bookedRoomDays += overlapDays;
         });
 
-        const availableRoomDays = (totalUnits * days) - bookedRoomDays;
-        const occupancyRate = (bookedRoomDays / (totalUnits * days)) * 100;
+        const totalRoomDays = totalUnits * days;
+        const availableRoomDays = totalRoomDays - bookedRoomDays;
+        const occupancyMetrics = calculateOccupancyMetrics(totalUnits, bookedRoomDays, days);
 
         return {
             roomTypeId: roomType.id,
             roomTypeName: roomType.name,
             totalUnits,
-            occupancyRate: parseFloat(occupancyRate.toFixed(2)),
-            occupancyPercentage: `${occupancyRate.toFixed(2)}%`,
             bookedRoomDays,
             availableRoomDays,
-            totalRoomDays: totalUnits * days
+            totalRoomDays,
+            occupancyRate: occupancyMetrics.rate,
+            occupancyPercentage: occupancyMetrics.percentage
         };
     });
 
     // Calculate overall occupancy
     const totalBookedDays = occupancyDetails.reduce((sum, dt) => sum + dt.bookedRoomDays, 0);
-    const totalAvailableDays = occupancyDetails.reduce((sum, dt) => sum + dt.availableRoomDays, 0);
-    const totalRoomDays = totalBookedDays + totalAvailableDays;
-    const overallOccupancy = (totalBookedDays / totalRoomDays) * 100;
+    const totalRoomDays = occupancyDetails.reduce((sum, dt) => sum + dt.totalRoomDays, 0);
+    const totalAvailableDays = totalRoomDays - totalBookedDays;
+    const overallOccupancy = totalRoomDays > 0 
+        ? (totalBookedDays / totalRoomDays) * 100 
+        : 0;
 
     return res.status(200).json(
         new ApiResponse(200, {
@@ -168,21 +189,15 @@ const getRevenueByRoomType = asyncHandler(async(req, res) => {
 
     let roomTypeFilter = {};
     if(roomTypeId){
-        const roomType = await prisma.roomType.findFirst({
-            where: {id: roomTypeId, deletedAt: null}
-        });
-
-        if(!roomType){
-            throw new ApiError(404, "Room type not found");
-        }
-
-        roomTypeFilter = {id: roomTypeId};
+        roomTypeFilter.id = roomTypeId
     }
 
     // Fetch bookings grouped by room type
     const bookings = await prisma.booking.findMany({
         where: {
-            ...roomTypeFilter,
+            roomType: {
+                ...roomTypeFilter, 
+            },
             checkIn: {lt: end},
             checkOut: {gt: start},
             status: {in: ["CONFIRMED", "CHECKED_IN", "CHECKED_OUT"]},
@@ -190,45 +205,59 @@ const getRevenueByRoomType = asyncHandler(async(req, res) => {
         },
         include: {
             roomType: {select: {id: true, name: true, basePrice: true}},
-            payment: {select: {status: true}}
+            payment: {select: {status: true, amount: true}}
         }
     });
 
     if(bookings.length === 0){
-        throw new ApiError(404, "No bookings found for the specified period");
+        return res.status(200).json(
+            new ApiResponse(200, {
+                period: {
+                    from: start.toISOString().split('T')[0],
+                    to: end.toISOString().split('T')[0]
+                },
+                summary: {
+                    totalRevenue: 0,
+                    totalBookings: 0,
+                    paidRevenue: 0,
+                    pendingRevenue: 0,
+                    avgRevenuePerBooking: 0
+                },
+                byRoomType: []
+            }, "No bookings found for the specified period")
+        );
     }
 
     // Group by room type and calculate revenue
     const revenueMap = new Map();
 
     bookings.forEach(booking => {
-        const key = booking.roomTypeId;
-        if(!revenueMap.has(key)){
-            revenueMap.set(key, {
-                roomTypeId: booking.roomType.id,
+        const roomTypeId = booking.roomTypeId;
+        if(!revenueMap.has(roomTypeId)){
+            revenueMap.set(roomTypeId, {
+                roomTypeId,
                 roomTypeName: booking.roomType.name,
                 basePrice: parseFloat(booking.roomType.basePrice),
                 totalRevenue: 0,
-                successfulPayments: 0,
-                pendingPayments: 0,
-                failedPayments: 0,
+                paidRevenue: 0,
+                pendingRevenue: 0,
                 totalBookings: 0,
-                avgBookingValue: 0
+                paidBookings: 0,
+                pendingBookings: 0
             });
         }
 
-        const data = revenueMap.get(key);
-        data.totalRevenue += parseFloat(booking.totalPrice);
+        const data = revenueMap.get(roomTypeId);
+        const bookingAmount = parseFloat(booking.totalPrice);
+        data.totalRevenue += bookingAmount;
         data.totalBookings += 1;
 
-        if(booking.payment){
-            if(booking.payment.status === "SUCCESS"){
-                data.successfulPayments += 1;
-            } else if(booking.payment.status === "PENDING"){
-                data.pendingPayments += 1;
-            } else {
-                data.failedPayments += 1;
-            }
+        if (booking.payment && booking.payment.status === "SUCCESS") {
+            data.paidRevenue += parseFloat(booking.payment.amount);
+            data.paidBookings += 1;
+        } else {
+            data.pendingRevenue += bookingAmount;
+            data.pendingBookings += 1;
         }
     });
 
@@ -236,12 +265,17 @@ const getRevenueByRoomType = asyncHandler(async(req, res) => {
     const revenueByRoomType = Array.from(revenueMap.values()).map(data => ({
         ...data,
         totalRevenue: parseFloat(data.totalRevenue.toFixed(2)),
+        paidRevenue: parseFloat(data.paidRevenue.toFixed(2)),
+        pendingRevenue: parseFloat(data.pendingRevenue.toFixed(2)),
         avgBookingValue: parseFloat((data.totalRevenue / data.totalBookings).toFixed(2))
     }));
 
     // Calculate overall metrics
     const totalRevenue = revenueByRoomType.reduce((sum, rt) => sum + rt.totalRevenue, 0);
+    const paidRevenue = revenueByRoomType.reduce((sum, rt) => sum + rt.paidRevenue, 0);
+    const pendingRevenue = revenueByRoomType.reduce((sum, rt) => sum + rt.pendingRevenue, 0);
     const totalBookings = revenueByRoomType.reduce((sum, rt) => sum + rt.totalBookings, 0);
+
 
     return res.status(200).json(
         new ApiResponse(200, {
@@ -251,8 +285,12 @@ const getRevenueByRoomType = asyncHandler(async(req, res) => {
             },
             summary: {
                 totalRevenue: parseFloat(totalRevenue.toFixed(2)),
+                paidRevenue: parseFloat(paidRevenue.toFixed(2)),
+                pendingRevenue: parseFloat(pendingRevenue.toFixed(2)),
                 totalBookings,
-                avgRevenuePerBooking: parseFloat((totalRevenue / totalBookings).toFixed(2))
+                avgRevenuePerBooking: totalBookings > 0 
+                    ? parseFloat((totalRevenue / totalBookings).toFixed(2)) 
+                    : 0
             },
             byRoomType: revenueByRoomType
         }, "Revenue report generated successfully")
@@ -260,117 +298,96 @@ const getRevenueByRoomType = asyncHandler(async(req, res) => {
 });
 
 // Predict future availability for next N days
-const getAvailabilityForecast = asyncHandler(async(req, res) => {
-    const {days = 30} = req.query;
+const getAvailabilityForecast = asyncHandler(async (req, res) => {
+    const { days = 30 } = req.query;
+    const numDays = Math.min(Math.max(parseInt(days) || 30, 1), 365);
 
-    if(days < 1 || days > 365){
-        throw new ApiError(400, "Days must be between 1 and 365");
-    }
-
+    // Date Handling (UTC Midnight for consistency)
     const startDate = new Date();
-    startDate.setHours(0, 0, 0, 0);
-
+    startDate.setUTCHours(0, 0, 0, 0);
     const endDate = new Date(startDate);
-    endDate.setDate(endDate.getDate() + parseInt(days));
+    endDate.setUTCDate(startDate.getUTCDate() + numDays);
 
-    // Fetch all room types with inventory and bookings
     const roomTypes = await prisma.roomType.findMany({
-        where: {deletedAt: null},
+        where: { deletedAt: null },
         include: {
-            _count: {select: {units: true}},
+            _count: { select: { units: true } },
             inventory: {
-                where: {
-                    date: {gte: startDate, lt: endDate}
-                },
-                select: {date: true, availableCount: true, totalStock: true},
-                orderBy: {date: 'asc'}
+                where: { date: { gte: startDate, lt: endDate } },
+                select: { date: true, availableCount: true, totalStock: true }
             },
             bookings: {
                 where: {
-                    checkIn: {lt: endDate},
-                    checkOut: {gt: startDate},
-                    status: {in: ["CONFIRMED", "CHECKED_IN"]}
+                    checkIn: { lt: endDate },
+                    checkOut: { gt: startDate },
+                    status: { in: ["CONFIRMED", "CHECKED_IN"] },
+                    deletedAt: null 
                 },
-                select: {checkIn: true, checkOut: true}
+                select: { checkIn: true, checkOut: true }
             }
         }
     });
 
-    if(roomTypes.length === 0){
-        throw new ApiError(404, "No room types found");
-    }
+    if (roomTypes.length === 0) throw new ApiError(404, "No room types found");
 
-    // Build forecast for each room type
     const forecasts = roomTypes.map(roomType => {
         const totalUnits = roomType._count.units;
+        
+        // Pre-index Inventory 
+        const inventoryMap = new Map(
+            roomType.inventory.map(inv => [inv.date.toISOString().split('T')[0], inv])
+        );
+
+        // Pre-calculate Occupancy Map 
+        const occupancyMap = new Map();
+        roomType.bookings.forEach(booking => {
+            let cursor = new Date(Math.max(booking.checkIn, startDate));
+            const bookingEnd = new Date(Math.min(booking.checkOut, endDate));
+            
+            while (cursor < bookingEnd) {
+                const dKey = cursor.toISOString().split('T')[0];
+                occupancyMap.set(dKey, (occupancyMap.get(dKey) || 0) + 1);
+                cursor.setUTCDate(cursor.getUTCDate() + 1);
+            }
+        });
+
         const dailyForecast = [];
+        let loopDate = new Date(startDate);
 
-        const currentDate = new Date(startDate);
-        while(currentDate < endDate){
-            const dateKey = currentDate.toISOString().split('T')[0];
+        while (loopDate < endDate) {
+            const dateKey = loopDate.toISOString().split('T')[0];
+            const inv = inventoryMap.get(dateKey);
+            const occupied = occupancyMap.get(dateKey) || 0;
 
-            // Get inventory for this date
-            const inventoryData = roomType.inventory.find(
-                inv => inv.date.toISOString().split('T')[0] === dateKey
-            );
-
-            // Get bookings for this date
-            const bookingsForDate = roomType.bookings.filter(booking => {
-                const checkIn = new Date(booking.checkIn);
-                checkIn.setHours(0, 0, 0, 0);
-                const checkOut = new Date(booking.checkOut);
-                checkOut.setHours(0, 0, 0, 0);
-
-                return checkIn <= currentDate && currentDate < checkOut;
-            }).length;
-
-            const available = inventoryData ? inventoryData.availableCount : totalUnits;
-            const occupancyCount = bookingsForDate;
-            const actualAvailable = Math.max(0, available - occupancyCount);
+            const available = inv ? inv.availableCount : Math.max(0, totalUnits - occupied);
 
             dailyForecast.push({
                 date: dateKey,
-                totalUnits,
-                occupiedUnits: occupancyCount,
-                availableUnits: actualAvailable,
-                occupancyPercentage: parseFloat(((occupancyCount / totalUnits) * 100).toFixed(2))
+                totalUnits: inv ? inv.totalStock : totalUnits,
+                occupiedUnits: occupied,
+                availableUnits: available,
+                occupancyPercentage: totalUnits > 0 ? parseFloat(((occupied / totalUnits) * 100).toFixed(2)) : 0
             });
 
-            currentDate.setDate(currentDate.getDate() + 1);
+            loopDate.setUTCDate(loopDate.getUTCDate() + 1);
         }
 
-        // Calculate forecast statistics
-        const avgOccupancy = dailyForecast.reduce((sum, d) => sum + d.occupancyPercentage, 0) / dailyForecast.length;
-        const minAvailable = Math.min(...dailyForecast.map(d => d.availableUnits));
-        const maxAvailable = Math.max(...dailyForecast.map(d => d.availableUnits));
-        const fullyBookedDays = dailyForecast.filter(d => d.availableUnits === 0).length;
+        // Calculate statistics from the dailyForecast array
+        const stats = calculateStats(dailyForecast, totalUnits);
 
         return {
             roomTypeId: roomType.id,
             roomTypeName: roomType.name,
             totalUnits,
-            statistics: {
-                avgOccupancyPercentage: parseFloat(avgOccupancy.toFixed(2)),
-                minAvailableUnits: minAvailable,
-                maxAvailableUnits: maxAvailable,
-                fullyBookedDays,
-                partiallyAvailableDays: dailyForecast.filter(d => d.availableUnits > 0 && d.availableUnits < totalUnits).length,
-                completelyAvailableDays: dailyForecast.filter(d => d.availableUnits === totalUnits).length
-            },
+            statistics: stats,
             dailyForecast
         };
     });
 
-    return res.status(200).json(
-        new ApiResponse(200, {
-            period: {
-                from: startDate.toISOString().split('T')[0],
-                to: endDate.toISOString().split('T')[0],
-                days: parseInt(days)
-            },
-            forecasts
-        }, "Availability forecast generated successfully")
-    );
+    return res.status(200).json(new ApiResponse(200, {
+        period: { from: startDate.toISOString().split('T')[0], to: endDate.toISOString().split('T')[0], days: numDays },
+        forecasts
+    }, "Forecast generated successfully"));
 });
 
 // Get current inventory status summary
@@ -386,7 +403,8 @@ const getInventoryStatus = asyncHandler(async(req, res) => {
             units: {
                 select: {
                     id: true,
-                    status: true
+                    status: true,
+                    roomNumber: true
                 }
             },
             inventory: {
@@ -399,7 +417,7 @@ const getInventoryStatus = asyncHandler(async(req, res) => {
                     checkOut: {gt: today},
                     status: {in: ["CONFIRMED", "CHECKED_IN"]}
                 },
-                select: {id: true}
+                select: {id: true, roomUnitId: true}
             }
         }
     });
@@ -473,204 +491,213 @@ const getInventoryStatus = asyncHandler(async(req, res) => {
 });
 
 // Get booking trends - Most booked room types
-const getBookingTrends = asyncHandler(async(req, res) => {
-    const {startDate, endDate, limit = 10} = req.body;
-    let {page = 1} = req.query;
+const getBookingTrends = asyncHandler(async (req, res) => {
+    const { startDate, endDate, limit = 10 } = req.body;
+    let { page = 1 } = req.query;
 
-    const {start, end} = validateDateRange(startDate, endDate);
+    const { start, end, days } = validateDateRange(startDate, endDate);
 
     page = Math.max(1, parseInt(page) || 1);
-    limit = Math.min(50, Math.max(1, parseInt(limit) || 10));
-    const skip = (page - 1) * limit;
+    const limitNum = Math.min(50, Math.max(1, parseInt(limit)));
+    const skip = (page - 1) * limitNum;
 
-    // Fetch bookings with room type details
-    const bookings = await prisma.booking.findMany({
+    // Fetch bookings with aggregation
+    const bookings = await prisma.booking.groupBy({
+        by: ['roomTypeId'],
         where: {
-            checkIn: {lt: end},
-            checkOut: {gt: start},
-            status: {in: ["CONFIRMED", "CHECKED_IN", "CHECKED_OUT"]},
-            roomType: {deletedAt: null}
+            checkIn: { gte: start },
+            checkOut: { lte: end },
+            status: { in: ["CONFIRMED", "CHECKED_IN", "CHECKED_OUT"] },
+            roomType: { deletedAt: null }
         },
-        include: {
-            roomType: {select: {id: true, name: true, basePrice: true, capacity: true}}
+        _count: { id: true },
+        _sum: { totalPrice: true },
+        orderBy: {
+            _count: { id: 'desc' }
+        },
+        take: limitNum,
+        skip
+    });
+
+    // Get total count for pagination
+    const totalRoomTypes = await prisma.booking.groupBy({
+        by: ['roomTypeId'],
+        where: {
+            checkIn: { gte: start },
+            checkOut: { lte: end },
+            status: { in: ["CONFIRMED", "CHECKED_IN", "CHECKED_OUT"] },
+            roomType: { deletedAt: null }
         }
     });
 
-    if(bookings.length === 0){
-        throw new ApiError(404, "No bookings found for the specified period");
+    if (bookings.length === 0) {
+        return res.status(200).json(
+            new ApiResponse(200, {
+                period: {
+                    from: start.toISOString().split('T')[0],
+                    to: end.toISOString().split('T')[0],
+                    days
+                },
+                pagination: {
+                    currentPage: page,
+                    totalPages: 0,
+                    totalItems: 0,
+                    itemsPerPage: limitNum
+                },
+                trends: []
+            }, "No booking trends found")
+        );
     }
 
-    // Group and analyze booking trends
-    const trendMap = new Map();
-
-    bookings.forEach(booking => {
-        const key = booking.roomTypeId;
-        if(!trendMap.has(key)){
-            trendMap.set(key, {
-                roomTypeId: booking.roomType.id,
-                roomTypeName: booking.roomType.name,
-                basePrice: parseFloat(booking.roomType.basePrice),
-                capacity: booking.roomType.capacity,
-                totalBookings: 0,
-                totalRevenue: 0,
-                totalNights: 0,
-                avgNightlyRate: 0
-            });
-        }
-
-        const data = trendMap.get(key);
-        data.totalBookings += 1;
-        data.totalRevenue += parseFloat(booking.totalPrice);
-
-        const checkIn = new Date(booking.checkIn);
-        const checkOut = new Date(booking.checkOut);
-        const nights = Math.ceil((checkOut - checkIn) / (1000 * 60 * 60 * 24));
-        data.totalNights += nights;
+    // Fetch room type details
+    const roomTypeIds = bookings.map(b => b.roomTypeId);
+    const roomTypes = await prisma.roomType.findMany({
+        where: { id: { in: roomTypeIds } },
+        select: { id: true, name: true, basePrice: true }
     });
 
-    // Calculate averages and sort
-    let trends = Array.from(trendMap.values())
-        .map(data => ({
-            ...data,
-            totalRevenue: parseFloat(data.totalRevenue.toFixed(2)),
-            avgNightlyRate: parseFloat((data.totalRevenue / data.totalNights).toFixed(2)),
-            revenuePerBooking: parseFloat((data.totalRevenue / data.totalBookings).toFixed(2))
-        }))
-        .sort((a, b) => b.totalBookings - a.totalBookings);
+    const roomTypeMap = new Map(roomTypes.map(rt => [rt.id, rt]));
 
-    const total = trends.length;
-    trends = trends.slice(skip, skip + limit);
+    // Build trends data
+    const trends = bookings.map((booking, index) => {
+        const roomType = roomTypeMap.get(booking.roomTypeId);
+        const totalBookings = booking._count.id;
+        const totalRevenue = parseFloat(booking._sum.totalPrice || 0);
+        
+        return {
+            rank: skip + index + 1,
+            roomTypeId: booking.roomTypeId,
+            roomTypeName: roomType?.name || "Unknown",
+            basePrice: roomType ? parseFloat(roomType.basePrice) : 0,
+            totalBookings,
+            totalRevenue: parseFloat(totalRevenue.toFixed(2)),
+            avgRevenuePerBooking: totalBookings > 0 
+                ? parseFloat((totalRevenue / totalBookings).toFixed(2)) 
+                : 0
+        };
+    });
 
-    const totalPages = Math.ceil(total / limit);
-
-    // Calculate trend insights
-    const topRoomType = Array.from(trendMap.values()).reduce((max, current) => 
-        current.totalBookings > max.totalBookings ? current : max
-    );
+    const totalPages = Math.ceil(totalRoomTypes.length / limitNum);
 
     return res.status(200).json(
         new ApiResponse(200, {
             period: {
                 from: start.toISOString().split('T')[0],
-                to: end.toISOString().split('T')[0]
+                to: end.toISOString().split('T')[0],
+                days
             },
-            insights: {
-                mostBookedRoomType: topRoomType.roomTypeName,
-                mostBookedCount: topRoomType.totalBookings,
-                totalBookings: bookings.length,
-                avgBookingsPerRoomType: parseFloat((bookings.length / trendMap.size).toFixed(2))
-            },
-            trends,
             pagination: {
-                total,
-                page,
-                limit,
-                totalPages
-            }
-        }, "Booking trends retrieved successfully")
+                currentPage: page,
+                totalPages,
+                totalItems: totalRoomTypes.length,
+                itemsPerPage: limitNum
+            },
+            trends
+        }, "Booking trends fetched successfully")
     );
 });
 
 // Comprehensive dashboard report
-const getDashboardReport = asyncHandler(async(req, res) => {
-    const {days = 30} = req.query;
+const getDashboardReport = asyncHandler(async (req, res) => {
+    const { days = 30 } = req.query;
+    const numDays = Math.min(Math.max(parseInt(days) || 30, 1), 365);
 
-    if(days < 1 || days > 365){
-        throw new ApiError(400, "Days must be between 1 and 365");
-    }
-
+    // Normalize Date
     const endDate = new Date();
-    endDate.setHours(0, 0, 0, 0);
+    endDate.setUTCHours(23, 59, 59, 999);
+    const startDate = new Date();
+    startDate.setUTCDate(endDate.getUTCDate() - numDays);
+    startDate.setUTCHours(0, 0, 0, 0);
 
-    const startDate = new Date(endDate);
-    startDate.setDate(startDate.getDate() - parseInt(days));
-
-    // Parallel data fetching
+    //Parallel Database Aggregations
     const [
-        roomTypes,
-        bookings,
-        inventory,
-        dailyRates
+        roomTypeStats,
+        revenueData,
+        statusCounts,
+        occupancyData
     ] = await Promise.all([
+        // Get Total Capacity
         prisma.roomType.findMany({
-            where: {deletedAt: null},
-            include: {_count: {select: {units: true}}}
+            where: { deletedAt: null },
+            select: { 
+                id: true, 
+                _count: { select: { units: true } } 
+            }
         }),
-        prisma.booking.findMany({
+
+        // Aggregated Revenue & Booking Counts (Last N days)
+        prisma.booking.aggregate({
             where: {
-                checkIn: {lt: endDate},
-                checkOut: {gt: startDate},
-                status: {in: ["CONFIRMED", "CHECKED_IN", "CHECKED_OUT"]},
-                roomType: {deletedAt: null}
+                checkIn: { gte: startDate, lte: endDate },
+                status: { in: ["CONFIRMED", "CHECKED_IN", "CHECKED_OUT"] },
+                deletedAt: null
             },
-            include: {roomType: {select: {id: true, name: true}}}
+            _sum: { totalPrice: true },
+            _count: { id: true },
+            _avg: { totalPrice: true }
         }),
-        prisma.roomInventory.findMany({
-            where: {
-                date: {gte: startDate, lt: endDate}
-            }
+
+        // Unit Status Snapshot (Housekeeping/Operations)
+        prisma.roomUnit.groupBy({
+            by: ['status'],
+            _count: { _all: true }
         }),
-        prisma.dailyRate.findMany({
-            where: {
-                date: {gte: startDate, lt: endDate}
-            }
-        })
+
+        // Performance Optimization: Raw SQL for "Room-Night" Occupancy
+        // Calculate the sum of nights stayed within the period for ALL bookings
+        prisma.$queryRaw`
+            SELECT SUM(
+                LEAST(CAST("checkOut" AS DATE), CAST(${endDate} AS DATE)) - 
+                GREATEST(CAST("checkIn" AS DATE), CAST(${startDate} AS DATE))
+            ) as "bookedRoomNights"
+            FROM "bookings"
+            WHERE "checkIn" < ${endDate} 
+              AND "checkOut" > ${startDate}
+              AND "status" IN ('CONFIRMED', 'CHECKED_IN', 'CHECKED_OUT')
+              AND "deletedAt" IS NULL
+        `
     ]);
 
-    // Calculate metrics
-    const totalRoomTypes = roomTypes.length;
-    const totalUnits = roomTypes.reduce((sum, rt) => sum + rt._count.units, 0);
-    const totalBookings = bookings.length;
-    const totalRevenue = bookings.reduce((sum, b) => sum + parseFloat(b.totalPrice), 0);
+    // Process Results
+    const totalUnits = roomTypeStats.reduce((sum, rt) => sum + rt._count.units, 0);
+    const totalRoomDaysCapacity = totalUnits * numDays;
+    
+    // Extract raw SQL result (BigInt handling)
+    const bookedRoomNights = Number(occupancyData[0]?.bookedRoomNights || 0);
+    const occupancyRate = totalRoomDaysCapacity > 0 
+        ? parseFloat(((bookedRoomNights / totalRoomDaysCapacity) * 100).toFixed(2)) 
+        : 0;
 
-    // Occupancy calculation
-    let bookedRoomDays = 0;
-    bookings.forEach(booking => {
-        const checkIn = new Date(booking.checkIn);
-        checkIn.setHours(0, 0, 0, 0);
-        const checkOut = new Date(booking.checkOut);
-        checkOut.setHours(0, 0, 0, 0);
-
-        const overlapStart = new Date(Math.max(checkIn.getTime(), startDate.getTime()));
-        const overlapEnd = new Date(Math.min(checkOut.getTime(), endDate.getTime()));
-
-        if(overlapStart < overlapEnd){
-            const overlapDays = Math.ceil((overlapEnd - overlapStart) / (1000 * 60 * 60 * 24));
-            bookedRoomDays += overlapDays;
-        }
+    // Format Status Snapshot
+    const unitStatus = {
+        AVAILABLE: 0, OCCUPIED: 0, DIRTY: 0, MAINTENANCE: 0
+    };
+    statusCounts.forEach(stat => {
+        unitStatus[stat.status] = stat._count._all;
     });
-
-    const totalRoomDays = totalUnits * parseInt(days);
-    const occupancyRate = (bookedRoomDays / totalRoomDays) * 100;
 
     return res.status(200).json(
         new ApiResponse(200, {
-            period: {
-                from: startDate.toISOString().split('T')[0],
-                to: endDate.toISOString().split('T')[0],
-                days: parseInt(days)
-            },
-            overview: {
-                totalRoomTypes,
-                totalUnits,
-                totalBookings,
-                totalRevenue: parseFloat(totalRevenue.toFixed(2)),
-                avgRevenuePerBooking: totalBookings > 0 ? parseFloat((totalRevenue / totalBookings).toFixed(2)) : 0
+            period: { from: startDate, to: endDate, days: numDays },
+            financials: {
+                totalRevenue: parseFloat((revenueData._sum.totalPrice || 0).toFixed(2)),
+                totalBookings: revenueData._count.id,
+                adr: parseFloat((revenueData._avg.totalPrice || 0).toFixed(2)), // Average Daily Rate
+                revPAR: parseFloat(((revenueData._sum.totalPrice || 0) / totalRoomDaysCapacity).toFixed(2)) // Revenue Per Available Room
             },
             occupancy: {
-                rate: parseFloat(occupancyRate.toFixed(2)),
-                percentage: `${occupancyRate.toFixed(2)}%`,
-                bookedRoomDays,
-                totalRoomDays
+                rate: occupancyRate,
+                bookedRoomNights,
+                totalCapacityNights: totalRoomDaysCapacity
             },
-            averages: {
-                bookingsPerRoomType: parseFloat((totalBookings / totalRoomTypes).toFixed(2)),
-                revenuePerRoomType: parseFloat((totalRevenue / totalRoomTypes).toFixed(2)),
-                revenuePerUnit: parseFloat((totalRevenue / totalUnits).toFixed(2))
+            operations: {
+                totalUnits,
+                unitStatus
             }
-        }, "Dashboard report generated successfully")
+        }, "High-performance report generated")
     );
 });
+
 
 export {
     getOccupancyRate,
